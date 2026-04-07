@@ -4,42 +4,32 @@ A Chrome extension that automatically marks files as "viewed" in GitHub pull req
 
 ## Installation
 
-### From Source
+### From Chrome Web Store
+
+Install from <https://chrome.google.com/webstore/detail/autoviewed/occcjmolphcfebdeichmoflmfgeefjef> and click **Add to Chrome**. Also works on Brave.
+
+### From Source (no build required)
 
 1. Clone the repo:
 
    ```sh
    git clone https://github.com/dwatring/autoviewed.git
-   cd autoviewed
    ```
 
-2. Install dependencies:
-
-   ```sh
-   npm install
-   ```
-
-3. Build the extension:
-
-   ```sh
-   npm run build
-   ```
-
-   This outputs a development build to the `dist/` directory.
-
-   For a production build (minified, with bundle analysis):
-
-   ```sh
-   npm run dist:quick
-   ```
-
-4. Load in Chrome:
+2. Load in Chrome:
    - Open `chrome://extensions/`
    - Enable **Developer mode** (toggle in the top-right corner)
    - Click **Load unpacked**
-   - Select the `dist/` folder
+   - Select the `dist/` folder inside the cloned repo
 
 ### Development
+
+If you want to modify the source and rebuild:
+
+```sh
+npm install
+npm run build
+```
 
 To rebuild automatically on file changes:
 
