@@ -4,10 +4,6 @@ A Chrome extension that automatically marks files as "viewed" in GitHub pull req
 
 ## Installation
 
-### From Chrome Web Store
-
-Install from <https://chrome.google.com/webstore/detail/autoviewed/occcjmolphcfebdeichmoflmfgeefjef> and click **Add to Chrome**. Also works on Brave.
-
 ### From Source (no build required)
 
 1. Clone the repo:
