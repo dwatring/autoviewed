@@ -1,7 +1,9 @@
 import debounce from 'lodash-es/debounce';
 import find from 'lodash-es/find';
-import { assert, assertIsDefined } from './base';
+import { assertIsDefined } from './base';
 import type { RepoList } from './options/model';
+
+const LOG_PREFIX = '[autoviewed]';
 
 type ConfigRule = {
   regex: RegExp;
@@ -16,27 +18,22 @@ type Config = {
 
 let configs: readonly Config[] = [];
 
-// Detect when the url changes.
-// We're only interested in running the autoapprove process when
-// we're on `github.com/<owner>/<repo>/pull/<pull-id>/files` but we need
-// to be installed on `github.com/<owner/<repo>/pull/<pull-id>/*` because
-// github navigates to the different sections of a PR using javascript.
+// Track files we've already processed so we don't re-process or miss new ones
+const processedFiles = new Set<string>();
+
+console.log(LOG_PREFIX, 'Content script loaded on:', document.location.href);
+
 let oldHref = document.location.href;
-let oldFilesCount = 0;
-const observer = new MutationObserver((mutations) => {
-  mutations.forEach(() => {
-    if (oldHref != document.location.href) {
-      oldHref = document.location.href;
-      if (shouldActivate()) {
-        markAllAsViewed();
-      }
-    } else if (shouldActivate()) {
-      const filesCount = document.getElementsByClassName('file').length;
-      if (oldFilesCount != filesCount) {
-        markAllAsViewed();
-      }
+const observer = new MutationObserver(() => {
+  if (oldHref != document.location.href) {
+    oldHref = document.location.href;
+    processedFiles.clear();
+    if (shouldActivate()) {
+      markAllAsViewed();
     }
-  });
+  } else if (shouldActivate()) {
+    markAllAsViewed();
+  }
 });
 const bodyEl = document.querySelector('body');
 assertIsDefined(bodyEl, '"body" elements must exist');
@@ -51,79 +48,197 @@ function findRepoConfig(): Config | undefined {
 }
 
 function shouldActivate(): boolean {
-  return window.location.pathname.endsWith('/files') && !!findRepoConfig();
+  const pathname = window.location.pathname;
+  return (
+    (pathname.endsWith('/files') || pathname.endsWith('/changes')) &&
+    !!findRepoConfig()
+  );
+}
+
+type FileEntry = {
+  filename: string;
+  viewedButton: HTMLButtonElement | null;
+  headerElement: Element;
+};
+
+/**
+ * Get all file entries from the page.
+ * New GitHub DOM: file headers contain both filename and Viewed button.
+ * Old GitHub DOM: <div class="file"> with form-based checkbox.
+ */
+function getFileEntries(): FileEntry[] {
+  const entries: FileEntry[] = [];
+  const seen = new Set<string>();
+
+  // Find all Viewed/Not Viewed buttons — the one consistent element across GitHub's DOM variants
+  const viewedButtons = document.querySelectorAll(
+    'button[aria-label="Viewed"], button[aria-label="Not Viewed"]',
+  );
+  for (const btn of viewedButtons) {
+    const viewedButton = btn as HTMLButtonElement;
+
+    // Walk up to find the file header container
+    let header: Element | null = btn.parentElement;
+    let filename: string | null = null;
+    while (header && header !== document.body) {
+      // Try data-file-path on an expand button
+      const expandBtn = header.querySelector('button[data-file-path]');
+      if (expandBtn) {
+        filename = expandBtn.getAttribute('data-file-path');
+        break;
+      }
+      // Try h3 > a > code (diff-file-header pattern)
+      const codeEl = header.querySelector('h3 a code');
+      if (codeEl) {
+        filename = (codeEl.textContent || '')
+          .replace(/[\u200E\u200F\u200B\u2069\u2066]/g, '')
+          .trim();
+        break;
+      }
+      header = header.parentElement;
+    }
+
+    if (!filename || !header || header === document.body) continue;
+    if (seen.has(filename)) continue;
+
+    seen.add(filename);
+    entries.push({ filename, viewedButton, headerElement: header });
+  }
+
+  console.log(LOG_PREFIX, 'Found', entries.length, 'file entries');
+  return entries;
 }
 
 const markAllAsViewed = debounce(() => {
   const config = findRepoConfig();
   assertIsDefined(config, '"config" should exist');
-  const fileElements = document.getElementsByClassName(
-    'file',
-  ) as HTMLCollectionOf<HTMLDivElement>;
-  oldFilesCount = fileElements.length;
-  for (let fileElement of fileElements) {
-    if (!fileElement.id.startsWith('diff-')) {
-      continue;
-    }
-    try {
-      const filename = extractFilename(fileElement);
 
+  const entries = getFileEntries();
+  // Only process new files we haven't seen yet
+  const newEntries = entries.filter((e) => !processedFiles.has(e.filename));
+  if (newEntries.length === 0) return;
+
+  console.log(
+    LOG_PREFIX,
+    'Processing',
+    newEntries.length,
+    'new files (',
+    entries.length,
+    'total)',
+  );
+
+  const toHide: FileEntry[] = [];
+
+  for (const entry of newEntries) {
+    processedFiles.add(entry.filename);
+    try {
       let handled = false;
       config.rules.forEach((rule) => {
-        if (rule.regex.test(filename)) {
+        const matches = rule.regex.test(entry.filename);
+        if (matches) {
+          console.log(
+            LOG_PREFIX,
+            'Rule matched:',
+            entry.filename,
+            '| pattern:',
+            rule.regex.source,
+            '| hide:',
+            rule.hide,
+          );
           handled = true;
-          markAsViewed(filename, fileElement);
+          markAsViewed(entry);
           if (rule.hide) {
-            hideFile(fileElement);
+            toHide.push(entry);
           }
         }
       });
 
+      if (!handled) {
+        console.log(LOG_PREFIX, 'No rule matched:', entry.filename);
+      }
+
       if (config.autogenerated && !handled) {
-        const generatedFile = !!fileElement.textContent?.match(
+        const generatedFile = !!entry.headerElement.textContent?.match(
           'Some generated files are not rendered by default',
         );
         if (generatedFile) {
-          markAsViewed(filename, fileElement);
+          console.log(
+            LOG_PREFIX,
+            'Auto-generated file detected:',
+            entry.filename,
+          );
+          markAsViewed(entry);
         }
       }
     } catch (error) {
-      // This error normally happens because GitHub uses `file` class for some hidden comment components
-      console.error('Cannot find filename for:', fileElement);
+      console.error(LOG_PREFIX, 'Error processing:', entry.filename, error);
     }
+  }
+
+  // Hide files after a delay so the Viewed click has time to register with React
+  if (toHide.length > 0) {
+    setTimeout(() => {
+      for (const entry of toHide) {
+        hideFile(entry);
+      }
+    }, 500);
   }
 }, 200);
 
-function extractFilename(fileElement: HTMLDivElement) {
-  return fileElement.getElementsByTagName('a')[0].title;
-}
+function markAsViewed(entry: FileEntry) {
+  if (!entry.viewedButton) {
+    console.error(LOG_PREFIX, 'No Viewed button for:', entry.filename);
+    return;
+  }
 
-function markAsViewed(filename: string, fileElement: HTMLDivElement) {
-  try {
-    const formElement = fileElement.getElementsByTagName('form')[0];
-    const viewedCheckboxElement = formElement.querySelector(
-      'input[name="viewed"]',
-    );
-    assertIsDefined(viewedCheckboxElement, '"viewed" checkbox must exist');
-    assert(
-      viewedCheckboxElement instanceof HTMLInputElement,
-      '"viewed" element must be a checkbox',
-    );
-    // Only click on the checkbox if it isn't checked, otherwise we would
-    // toggle the current value.
-    if (!viewedCheckboxElement.checked) {
-      formElement.getElementsByTagName('label')[0].click();
-    }
-  } catch (error) {
-    console.error('Cannot process: ', filename, error);
+  const ariaPressed = entry.viewedButton.getAttribute('aria-pressed');
+  const ariaLabel = entry.viewedButton.getAttribute('aria-label');
+  const isViewed = ariaPressed === 'true';
+  // Old DOM: check if it's a label wrapping a checkbox
+  const checkbox = entry.viewedButton.parentElement?.querySelector(
+    'input[name="viewed"]',
+  ) as HTMLInputElement | null;
+  const alreadyViewed = isViewed || (checkbox?.checked ?? false);
+
+  console.log(
+    LOG_PREFIX,
+    'markAsViewed:',
+    entry.filename,
+    '| aria-pressed:',
+    ariaPressed,
+    '| aria-label:',
+    ariaLabel,
+    '| alreadyViewed:',
+    alreadyViewed,
+  );
+
+  if (!alreadyViewed) {
+    console.log(LOG_PREFIX, 'Clicking Viewed for:', entry.filename);
+    entry.viewedButton.click();
+  } else {
+    console.log(LOG_PREFIX, 'Already viewed, skipping:', entry.filename);
   }
 }
 
-function hideFile(fileElement: HTMLDivElement) {
-  fileElement.style.display = 'none';
+/**
+ * GitHub lazy-loads file diffs as you scroll. This function scrolls down the
+ * page incrementally to force all files to load, clicks any "Load diff" buttons,
+ * then scrolls back to the original position.
+ */
+function hideFile(entry: FileEntry) {
+  // Hide the entire file section
+  let container = entry.headerElement;
+  // Walk up to find the file's outermost container that includes the diff table
+  while (container.parentElement && container.parentElement !== document.body) {
+    const table = container.querySelector('table[data-diff-anchor]');
+    if (table) break;
+    container = container.parentElement;
+  }
+  (container as HTMLElement).style.display = 'none';
 }
 
 chrome.storage.sync.get(['db'], (result) => {
+  console.log(LOG_PREFIX, 'Storage loaded:', JSON.stringify(result));
   const repoList: RepoList =
     'db' in result ? (result.db as RepoList) : { repos: [] };
   configs = repoList.repos.map((repo) => ({
@@ -132,9 +247,13 @@ chrome.storage.sync.get(['db'], (result) => {
       regex: new RegExp(rule.regex),
       hide: rule.hide,
     })),
-    // `repo.autogenerated` might be undefined for existing configs
     autogenerated: !!repo.autogenerated,
   }));
+  console.log(
+    LOG_PREFIX,
+    'Configs loaded:',
+    configs.map((c) => ({ repo: c.repo, rules: c.rules.length })),
+  );
   if (shouldActivate()) {
     markAllAsViewed();
   }

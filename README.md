@@ -1,29 +1,71 @@
-# Introduction
+# Autoviewed
 
-This Chrome extension will help you deal with the files _you don't want to review_ in your GitHub pull requests.
+A Chrome extension that automatically marks files as "viewed" in GitHub pull requests, so you can skip auto-generated files and other files you don't want to review.
 
 ## Installation
 
-Easy peasy, just go to <https://chrome.google.com/webstore/detail/autoviewed/occcjmolphcfebdeichmoflmfgeefjef> and click `Add to Chrome`. It also works on the awesome Brave browser.
+### From Chrome Web Store
 
-## Use cases
+Install from <https://chrome.google.com/webstore/detail/autoviewed/occcjmolphcfebdeichmoflmfgeefjef> and click **Add to Chrome**. Also works on Brave.
 
-Hide auto-generated files you might have in your repository.
-I know, I know, you shouldn't have auto-generated files in your git repository, but you know, sometimes you do. I'm not here to judge you.
+### From Source
 
-Your teammates insist in creating jest snapshots for their React components and you just don't want to waste your time reviewing them.
+1. Clone the repo:
 
-## How does it work?
+   ```sh
+   git clone https://github.com/dwatring/autoviewed.git
+   cd autoviewed
+   ```
 
-First you need to configure the extension:
+2. Install dependencies:
 
-1. Right click on the extension button and select `Options`.
+   ```sh
+   npm install
+   ```
+
+3. Build the extension:
+
+   ```sh
+   npm run build
+   ```
+
+   This outputs a development build to the `dist/` directory.
+
+   For a production build (minified, with bundle analysis):
+
+   ```sh
+   npm run dist:quick
+   ```
+
+4. Load in Chrome:
+   - Open `chrome://extensions/`
+   - Enable **Developer mode** (toggle in the top-right corner)
+   - Click **Load unpacked**
+   - Select the `dist/` folder
+
+### Development
+
+To rebuild automatically on file changes:
+
+```sh
+npm run build:watch
+```
+
+After each rebuild, go to `chrome://extensions/` and click the reload button on the Autoviewed card to pick up changes.
+
+## Configuration
+
+1. Right-click the extension icon and select **Options**.
    ![](docs/open-options.png)
-1. Add the repositories in which you want the extension to be enabled.
+2. Add the repositories where you want the extension enabled.
    ![](docs/add-repository.png)
-1. Add a regular expression to match the files you want to mark as viewed automatically.
+3. Add a regex to match files you want auto-marked as viewed.
    ![](docs/add-rule.png)
-1. Go to a pull request and select `Files changed` tab.
-   ![](docs/select-files.png)
-1. See the `viewed` progress bar moving.
+4. Open a pull request's **Files changed** tab and watch the viewed progress bar move.
    ![](docs/autoviewed-progress.gif)
+
+## Use Cases
+
+- Hide auto-generated files (transpiled output, lock files, etc.)
+- Skip Jest snapshots or other test artifacts your teammates create
+- Automatically view any files matching a pattern so you can focus on what matters
